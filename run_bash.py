@@ -9,7 +9,6 @@ log = logging.getLogger(__name__)
 
 @hydra.main(config_path='base_conf', config_name='config')
 def launch(cfg: DictConfig):
-    slurm_utils.symlink_hydra(cfg, os.getcwd())
     log.info(cfg.command)
     subprocess.run(cfg.command, shell=True)
 

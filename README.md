@@ -89,6 +89,11 @@ To perform a hyperparameter sweep, simply set multiple values for each override 
 ```
 python3 my_script.py train.lr=1e-3,1e-4,1e-5 train.optimizer=sgd,adam -m
 ```
+Jobs can also be run locally by omitting the `-m` option. For example
+```
+python3 run_bash.py command="echo TEST"
+```
+will simply run the provided command locally rather than on the cluster.
 
 More details on [overrides](https://hydra.cc/docs/tutorials/basic/your_first_app/config_file/) and [sweeps](https://hydra.cc/docs/tutorials/basic/running_your_app/multi-run/) can be found in the [hydra tutorial](https://hydra.cc/docs/tutorials/intro/)
 
