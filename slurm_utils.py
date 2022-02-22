@@ -35,10 +35,7 @@ def filter_overrides(overrides):
         opt, val = overrides[i].split('=', 1)
         if "$" in val:
             val = val.replace('$', '\$')
-        if opt == "command":
-            overrides[i] = '='.join([opt, '\\"' + val + '\\"'])
-        else:
-            overrides[i] = '='.join([opt, '"' + val + '"'])
+        overrides[i] = '='.join([opt, '"' + val + '"'])
 
     return [x for x in overrides if not x.startswith("hydra.")]
 
