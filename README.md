@@ -15,11 +15,11 @@ pip install -e .
 
 This will install the 1.0 version of hydra with the slurm launcher plugin installed. To customize the launcher for your specific environment, you will need to change the global variables set in `slurm_utils.py`.
 
-## Using the Launcher
+# Using the Launcher
 
 This slurm launcher acts as a layer of abstraction on top of a system for autogenerating `.sh` and `.slrm` files and launching slurm jobs. It presents a simple way to run many sets of repeatable experiments and organize the outputs with minimal overhead. The core of the plugin is the hydra configuration files.
 
-### Setting up the Configuration
+## Setting up the Configuration
 In order to use the slurm launcher, you should create a configuration folder that will contain the `.yaml` configuration files for your project as well as some base config files. An example base configuration is provided in `base_conf`. The basic structure of the folder is shown below.
 
 ```
@@ -38,7 +38,9 @@ In order to use the slurm launcher, you should create a configuration folder tha
 
 `slurm/` contains the configuration for the slurm job. These values can be easily tweaked or overriden to fit whatever slurm cluster you are running on. To add additional slurm options, simply add in the key value pair into this file (or another alternate configuration) and it will automatically be added to the `.slrm` file.
 
-### Dynamic Evaluation
+More details on setting up and using configuration files can be found [here](https://hydra.cc/docs/intro/)
+
+## Dynamic Evaluation
 This plugin adds in dynamic evaluation into configuration processing. Dynamic evluation is invoked using the keyword `eval:` at the start of a value. The launcher will then evaluate the expression after this keyword using python and interpolate the result as the value for that particular key.
 
 As an example, in the `slurm/default.yaml` configuration file, we have the key/value pairs
@@ -47,9 +49,9 @@ cpus_per_task: eval:4*int("${slurm.gres}"[-1])
 gres: gpu:1
 ```
 Hydra will first interpolate `${slurm.gres}`, then evaluate the expression `4*int("gpu:1"[-1])` which returns `4`. This is then the value of `cpus_per_task` during runtime. 
-Dynamic evaluation is useful for setting arguments based on the value from other arguments. In this case, we would like to request 4 more CPUs than there are GPUs.
+Dynamic evaluation is useful for setting arguments based on the value from other arguments. In this case, we would like to request 4 times as many CPUs as there are GPUs.
 
-### Decorating a Function
+## Decorating a Function
 Modifying an existing script to run with the slurm launcher is simple. First add in the import statements
 ```
 import hydra
@@ -71,11 +73,22 @@ def my_method(cfg: DictConfig):
 All values in the configuration will then be available to your script from within the `cfg` object. As an example, the `run_bash.py` script launches a given bash command (stored within `cfg.command`) on the slurm cluster.
 Adding in the final symlinking command is not necessary but is useful if you need to check certain log easily. Note that including this line means that jobs cannot run locally.
 
-### Running a Job
+## Running a Job
 To launch your script on the cluster, simply run
 ```
 python3 my_script.py -m
 ```
-and that's it! The plugin will automatically generate the required `.sh` and `.slrm` files then launch your job for you.
+and that's it! The plugin will automatically generate the required `.sh` and `.slrm` files then launch your job for you. 
+Values can be overriden as in hydra simply by specifying a particular group setting or specific value.
+For example, if I wanted to run my script, but using a different dataset and with 4 GPUs instead of 1, I would run:
+```
+python3 my_script.py data=my_data slurm.gres=gpu:4 -m
+```
+To perform a hyperparameter sweep, simply set multiple values for each override and hydra will run a separate job for each configuration in the cartesian product.
+```
+python3 my_script.py train.lr=1e-3,1e-4,1e-5 train.optimizer=sgd,adam -m
+```
+
+More details on [overrides](https://hydra.cc/docs/tutorials/basic/your_first_app/config_file/) and [sweeps](https://hydra.cc/docs/tutorials/basic/running_your_app/multi-run/) can be found in the [hydra tutorial](https://hydra.cc/docs/tutorials/intro/)
 
 
