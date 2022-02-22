@@ -97,4 +97,16 @@ will simply run the provided command locally rather than on the cluster.
 
 More details on [overrides](https://hydra.cc/docs/tutorials/basic/your_first_app/config_file/) and [sweeps](https://hydra.cc/docs/tutorials/basic/running_your_app/multi-run/) can be found in the [hydra tutorial](https://hydra.cc/docs/tutorials/intro/)
 
+### Job Names
+Job names are generated automatically from the `slurm.job_name` field. The field is typically a list of values that are concatenated with `_` to generate the final job name, but can be set manually to a single value.
+In order to change the job name, simply add or remove items in the list. By default, the first value in the list is simply the name of the script. 
 
+As an example, if we are training a model and wanted to include the training data, model name, and learning rate, our `job_name` field might look something like
+```
+job_name:
+  - eval:sys.argv[0][:-3].split('/')[-1]
+  - ${data._name}
+  - ${model._name}
+  - ${train.lr}
+```
+If any of these values are null, they are simply omitted when generating the final job name.
