@@ -15,6 +15,25 @@ log = logging.getLogger(__name__)
 hdd = "/scratch/hdd001/home/" + user
 ssd = '/scratch/ssd001/home/' + user
 
+def filter_overrides(overrides):
+    """
+    :param overrides: overrides list
+    :return: returning a new overrides list with all the keys starting with hydra. filtered.
+    """
+    overrides = list(overrides)
+
+    # add dynamic evaluation of config values
+    for i in range(len(overrides)):
+        opt, val = overrides[i].split('=', 1)
+        if "$" in val:
+            val = val.replace('$', '\$')
+        if opt == "command":
+            overrides[i] = '='.join([opt, '\\"' + val + '\\"'])
+        else:
+            overrides[i] = '='.join([opt, '"' + val + '"'])
+
+    return [x for x in overrides if not x.startswith("hydra.")]
+
 def eval_val(val):
     if 'eval:' in str(val):
         return val.split('eval:', 1)[0] + str(eval(val.split('eval:', 1)[1]))

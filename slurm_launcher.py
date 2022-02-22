@@ -11,7 +11,6 @@ from hydra.core.hydra_config import HydraConfig
 from hydra.core.utils import (
     JobReturn,
     configure_log,
-    filter_overrides,
     run_job,
     setup_globals,
 )
@@ -62,7 +61,7 @@ class SlurmLauncher(Launcher):
         runs: List[JobReturn] = []
         for idx, overrides in enumerate(job_overrides):
             idx = initial_job_idx + idx
-            lst = " ".join(filter_overrides(overrides))
+            lst = " ".join(slurm_utils.filter_overrides(overrides))
             log.info(f"\t#{idx} : {lst}")
             sweep_config = self.config_loader.load_sweep_config(
                 self.config, list(overrides)
@@ -75,7 +74,7 @@ class SlurmLauncher(Launcher):
             log.info("\tJob name : {}".format(slurm_utils.resolve_name(sweep_config.slurm.job_name)))
 
             slurm_utils.write_slurm(sweep_config)
-            slurm_utils.write_sh(sweep_config, " ".join(filter_overrides(overrides)))
+            slurm_utils.write_sh(sweep_config, " ".join(slurm_utils.filter_overrides(overrides)))
             slurm_utils.launch_job(sweep_config)
 
             configure_log(self.config.hydra.hydra_logging, self.config.hydra.verbose)
