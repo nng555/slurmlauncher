@@ -9,11 +9,19 @@ from hydra import utils
 from pathlib import Path
 from omegaconf import OmegaConf, listconfig
 
-user = os.environ['USER']
 log = logging.getLogger(__name__)
 
-hdd = "/scratch/hdd001/home/" + user
-ssd = '/scratch/ssd001/home/' + user
+# username
+USER = os.environ['USER']
+
+# home directory
+HOME = '/h/' + USER
+
+# path to venv directory if using
+VENV_DIR = HOME + '/venv/'
+
+# slurm job folder
+SLURM_DIR = '/checkpoint/' + USER
 
 def filter_overrides(overrides):
     """
@@ -60,10 +68,8 @@ def get_j_dir(cfg):
         date = datetime.datetime.now()
         date = date.strftime("%Y-%m-%d")
 
-    return os.path.join(ssd, "slurm", date, resolve_name(cfg.slurm.job_name))
-
-def get_data_dir(cfg):
-    return os.path.join('/scratch', 'ssd001', 'datasets', 'cfg.data.task', 'cfg.data.name')
+    # set default slurm directory here. By default is set to $HOME/slurm/${date}/${job.name}
+    return os.path.join(HOME, "slurm", date, resolve_name(cfg.slurm.job_name))
 
 def write_slurm(cfg):
 
@@ -108,9 +114,9 @@ def write_sh(cfg, overrides):
         Path(scripts_dir).mkdir(parents=True, exist_ok=True)
 
     if 'conda' in cfg:
-        venv_sh = 'source /h/$USER/miniconda3/etc/profile.d/conda.sh\nconda activate {}'.format(cfg.conda)
+        venv_sh = 'conda activate {}'.format(cfg.conda)
     elif 'venv' in cfg:
-        venv_sh = '. /h/$USER/venv/{}/bin/activate'.format(cfg.venv)
+        venv_sh = '. {}/{}/bin/activate'.format(VENV_DIR, cfg.venv)
     else:
         venv_sh = ''
 
@@ -118,7 +124,7 @@ def write_sh(cfg, overrides):
         shf.write(
 """#!/bin/bash
 if [ ! -d {0}/$SLURM_JOB_ID ]; then
-    ln -s /checkpoint/$USER/$SLURM_JOB_ID {0}/$SLURM_JOB_ID
+    ln -s {6}/$SLURM_JOB_ID {0}/$SLURM_JOB_ID
 fi
 touch {0}/$SLURM_JOB_ID/DELAYPURGE
 {2}
@@ -130,6 +136,7 @@ python3 {3} {4} slurm.date="{5}"
             exec_path,
             overrides,
             date,
+            SLURM_DIR,
         ))
 
 def symlink_hydra(cfg, cwd):

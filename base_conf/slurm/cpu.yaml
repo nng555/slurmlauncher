@@ -1,0 +1,12 @@
+# @package _group_
+cpus_per_task: eval:4*int("${slurm.gres}"[-1])
+job_name:
+  - eval:sys.argv[0][:-3].split('/')[-1]
+  - ${extra}
+mem: eval:str(20*int("${slurm.gres}"[-1]))+'G'
+nodes: 1
+ntasks_per_node: 1
+open_mode: append
+partition: cpu
+account: ~
+qos: nopreemption

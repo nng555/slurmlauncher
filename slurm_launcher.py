@@ -78,6 +78,4 @@ class SlurmLauncher(Launcher):
             slurm_utils.launch_job(sweep_config)
 
             configure_log(self.config.hydra.hydra_logging, self.config.hydra.verbose)
-            if sweep_config.wait:
-                time.sleep(1)
         return runs
