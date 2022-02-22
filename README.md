@@ -14,6 +14,7 @@ pip install -e .
 ```
 
 This will install the 1.0 version of hydra with the slurm launcher plugin installed. To customize the launcher for your specific environment, you will need to change the global variables set in `slurm_utils.py`.
+As a test, try running `python3 run_bash.py command="echo TEST" -m`, then checking the log files out `$HOME/slurm/${date}/run_bash/log/${job_id}.out`
 
 # Using the Launcher
 
