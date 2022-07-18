@@ -2,18 +2,12 @@
 
 Plugin files for launching jobs on a slurm cluster with Hydra. Currently works only with Hydra 1.0 to accomodate the use of fairseq as well, but fixing it to work with the latest dev version isn't too hard.
 
-To install, run the following commands:
-
+To install clone the repository (and ensure hydra is installed), then run
 ```
-git clone -b 1.0_branch https://github.com/facebookresearch/hydra.git
-git clone https://github.com/nng555/slurmlauncher.git
-cp slurmlauncher/slurm_utils.py hydra/hydra/slurm_utils.py
-cp slurmlauncher/slurm_launcher.py hydra/hydra/_internal/core_plugins/slurm_launcher.py
-cd hydra
 pip install -e .
 ```
 
-This will install the 1.0 version of hydra with the slurm launcher plugin installed. To customize the launcher for your specific environment, you will need to change the global variables set in `slurm_utils.py`.
+This will install the slurm launcher plugin. To customize the launcher for your specific environment, you will need to change the global variables set in `slurm_utils.py`.
 As a test, try running `python3 run_bash.py command="echo TEST" -m`, then checking the log files out `$HOME/slurm/${date}/run_bash/log/${job_id}.out`
 
 # Using the Launcher
