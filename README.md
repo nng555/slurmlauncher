@@ -3,7 +3,6 @@
 Slurm Launcher is a lightweight plugin for launching jobs on a slurm cluster with Hydra. There is a lot less machinery compared to a full framework like [submitit](https://github.com/facebookincubator/submitit), but this allows for greater control and customizability.
 
 To install, clone the repository then run:
-
 ```
 pip install -e .
 ```
