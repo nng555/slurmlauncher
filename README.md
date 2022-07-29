@@ -11,15 +11,42 @@ pip install -e .
 
 This slurm launcher acts as a layer of abstraction on top of a system for autogenerating `.slrm` files and launching slurm jobs as well as specifying subdirectories. It presents a simple way to run many sets of repeatable experiments and organize the outputs with minimal overhead. The core of the plugin is the hydra configuration file.
 
+## Quickstart
+
+If you simply want to launch an existing python script to a SLURM cluster using this plugin, follow these steps. An example script and configuration can be found in the `example/` folder.
+
+1. Copy `config.yaml` to the same directory as your file.
+2. Modify the `gres`, `mem`, and `partition`, as well as add any other `#SBATCH` parameters you want in `config.yaml` to work with your SLURM cluster.
+3. Add the following import statements to the top of your script:
+```
+import hydra
+from omegaconf import DictConfig
+```
+4. Ensure your `__main__` function of the script calls the method to be run, as below:
+```
+if __name__ == "__main__":
+    my_method()
+```
+5. Add the following decorator and modify the method signature:
+```
+@hydra.main(config_path='.', config_name='config')
+def my_method(cfg: DictConfig):
+    ...
+```
+If your method takes in arguments, these must be moved into `config.yaml` and can be specified manually on the command line by overriding them using hydra.
+More details on [overrides](https://hydra.cc/docs/tutorials/basic/your_first_app/config_file/) and [sweeps](https://hydra.cc/docs/tutorials/basic/running_your_app/multi-run/) can be found in the [hydra tutorial](https://hydra.cc/docs/tutorials/intro/).
+6. Launch your script:
+```
+python my_app.py -m
+```
+
 ## Setting up the Configuration
 
-To use the launcher locally, the minimum requirements are to override the default launcher and add a `tags` variable as shown below:
+To use the launcher locally, the minimum requirements are to override the default launcher as shown below:
 
 ```
 defaults:
   - override hydra/launcher: slurm
-
-tags: ~
 ```
 
 To run a job on the SLURM cluster, set the appropriate `sbatch` options in `hydra/launcher`. The only required options to be set are `gres`, `mem`, and `partition`. As an example from the config in the app in `example/`:
@@ -80,26 +107,6 @@ This indexes jobs using the learning rate and batch size. Alternatively, with no
 ## Job Names
 Job names are generated automatically from the `hydra.job.name` variable and are set by default to the name of the script. For a more descriptive job name for identification on slurm and in the filesystem, you can override the value in your configuration.
 
-## Decorating a Function
-Modifying an existing script to run with the slurm launcher is simple. First add in the import statements
-```
-import hydra
-from omegaconf import DictConfig
-```
-to the top of your script. The `__main__` function of the script should be as follows:
-```
-if __name__ == "__main__":
-    my_method()
-```
-Finally, add the decorator and modify the method signature as follows:
-```
-@hydra.main(config_path='/path/to/base_conf', config_name='config')
-def my_method(cfg: DictConfig):
-    slurm_utils.symlink_hydra(cfg, os.getcwd())
-    ...
-```
-All values in the configuration will then be available to your script from within the `cfg` object.
-
 ## Running a Job
 To launch your script on the cluster, simply run
 ```
@@ -121,5 +128,4 @@ python3 run_bash.py command="echo TEST"
 ```
 will simply run the provided command locally rather than on the cluster.
 
-More details on [overrides](https://hydra.cc/docs/tutorials/basic/your_first_app/config_file/) and [sweeps](https://hydra.cc/docs/tutorials/basic/running_your_app/multi-run/) can be found in the [hydra tutorial](https://hydra.cc/docs/tutorials/intro/)
 
