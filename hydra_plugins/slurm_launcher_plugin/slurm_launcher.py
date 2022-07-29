@@ -1,4 +1,3 @@
-# Copyright (c) Facebook, Inc. and its affiliates. All Rights Reserved
 from dataclasses import dataclass
 
 import sys
@@ -23,7 +22,7 @@ from hydra.core.config_store import ConfigStore
 from hydra.core.singleton import Singleton
 from hydra.plugins.launcher import Launcher
 from hydra.types import TaskFunction
-from omegaconf import DictConfig, open_dict, MISSING
+from omegaconf import DictConfig, open_dict, MISSING, OmegaConf
 
 # IMPORTANT:
 # If your plugin imports any module that takes more than a fraction of a second to import,
@@ -33,16 +32,14 @@ from omegaconf import DictConfig, open_dict, MISSING
 # Another approach is to place heavy includes in a file prefixed by _, such as _core.py:
 # Hydra will not look for plugin in such files and will not import them during plugin discovery.
 
-
 log = logging.getLogger(__name__)
 
-
 @dataclass
-class LauncherConfig:
+class SlurmConfig:
     _target_: str = (
         "hydra_plugins.slurm_launcher_plugin.slurm_launcher.SlurmLauncher"
     )
-    date: Optional[str] = None
+
     cpus_per_task: Optional[int] = None
     exclude: Optional[str] = None
     gres: str = MISSING
@@ -53,21 +50,24 @@ class LauncherConfig:
     partition: str = MISSING
     account: Optional[str] = None
     qos: Optional[str] = None
-    max_running: int = 350
-    max_pending: int = 350
-    max_total: int = 400
+    max_running: int = -1
+    max_pending: int = -1
+    max_total: int = -1
     wait_time: int = 10
     env_type: str = 'venv'
     env_name: Optional[str] = None
+    job_name: str = '${hydra.job.name}'
+    job_dir: str = '${hydra.sweep.dir}'
+    modules: Optional[str] = None
+    time: Optional[str] = None
 
 ConfigStore.instance().store(
-    group="hydra/launcher", name="slurm", node=LauncherConfig,
+    group="hydra/launcher", name="slurm", node=SlurmConfig,
 )
 
 class SlurmLauncher(Launcher):
 
     def __init__(self,
-                 date: str,
                  cpus_per_task: int,
                  exclude: str,
                  gres: str,
@@ -84,19 +84,22 @@ class SlurmLauncher(Launcher):
                  wait_time: int,
                  env_type: str,
                  env_name: str,
+                 job_name: str,
+                 job_dir: str,
+                 modules: str,
+                 time: str,
     ) -> None:
         self.config: Optional[DictConfig] = None
         self.task_function: Optional[TaskFunction] = None
         self.hydra_context: Optional[HydraContext] = None
 
-        # foo and var are coming from the the plugin's configuration
-        if date is not None:
-            self.date = date
-        else:
-            date = datetime.datetime.now()
-            self.date = date.strftime("%Y-%m-%d")
+        self.job_name = job_name
+        self.job_dir = job_dir
 
-        self.job_name = 'test'
+        if modules is not None:
+            self.modules = modules.split(',')
+        else:
+            self.modules = None
 
         self.slurm_kwargs = {
                 'cpus_per_task': str(cpus_per_task),
@@ -109,8 +112,7 @@ class SlurmLauncher(Launcher):
                 'partition': partition,
                 'account': account,
                 'qos': qos,
-                'output': '{}/log/%j.out'.format(self.job_dir),
-                'error': '{}/log/%J.err'.format(self.job_dir),
+                'time': time,
         }
 
         self.max_running = max_running
@@ -118,17 +120,6 @@ class SlurmLauncher(Launcher):
         self.max_total = max_total
 
         self.wait_time = wait_time
-
-        # set up run directories
-        self.scripts_dir = os.path.join(self.job_dir, "scripts")
-        if not os.path.exists(self.scripts_dir):
-            Path(self.scripts_dir).mkdir(parents=True, exist_ok=True)
-        self.slrm_fname = os.path.join(self.scripts_dir, self.job_name + '.slrm')
-
-        # set up run directories
-        self.log_dir = os.path.join(self.job_dir, "log")
-        if not os.path.exists(self.log_dir):
-            Path(self.log_dir).mkdir(parents=True, exist_ok=True)
 
         self.env_type = env_type
         self.env_name = env_name
@@ -144,21 +135,6 @@ class SlurmLauncher(Launcher):
         self.hydra_context = hydra_context
         self.task_function = task_function
 
-    """
-    def symlink_hydra(cfg, cwd):
-        if 'SLURM_JOB_ID' in os.environ:
-            hydra_dir = os.path.join(get_j_dir(cfg), 'conf')
-            if not os.path.exists(os.path.join(hydra_dir, os.environ['SLURM_JOB_ID'])):
-                log.info('Symlinking {} : {}'.format(cwd, hydra_dir))
-                if not os.path.exists(hydra_dir):
-                    Path(hydra_dir).mkdir(parents=True, exist_ok=True)
-                os.symlink(cwd, os.path.join(hydra_dir, os.environ['SLURM_JOB_ID']), target_is_directory=True)
-    """
-
-    @property
-    def job_dir(self):
-        return os.path.join(os.environ['HOME'], "slurm", self.date, self.job_name)
-
     def filter_overrides(self, overrides):
         """
         :param overrides: overrides list
@@ -166,38 +142,17 @@ class SlurmLauncher(Launcher):
         """
         overrides = list(overrides)
 
-        # add dynamic evaluation of config values
+        # escape characters for command line execution
         for i in range(len(overrides)):
             opt, val = overrides[i].split('=', 1)
             if "$" in val:
                 val = val.replace('$', '\$')
-            if opt == "command":
-                overrides[i] = '='.join([opt, '\\"' + val + '\\"'])
             else:
                 overrides[i] = '='.join([opt, '"' + val + '"'])
 
         return [x for x in overrides if not x.startswith("hydra.")]
 
-    def eval_val(self, val):
-        if 'eval:' in str(val):
-            return val.split('eval:', 1)[0] + str(eval(val.split('eval:', 1)[1]))
-        else:
-            return str(val)
-
-    def resolve_name(self, name):
-        if isinstance(name, listconfig.ListConfig):
-            name_list = []
-            for i in range(len(name)):
-                if name[i] is not None:
-                    if isinstance(name[i], listconfig.ListConfig):
-                        name_list.append('_'.join(name[i]))
-                    else:
-                        name_list.append(self.eval_val(str(name[i])))
-            return '_'.join(name_list)
-        else:
-            return self.eval_val(name)
-
-    def launch_job(self):
+    def launch_job(self, slrm_fname):
         # launch safe only when < 100 jobs running
         while(True):
             num_running = int(subprocess.run('squeue -u $USER | grep R | wc -l',
@@ -213,35 +168,40 @@ class SlurmLauncher(Launcher):
             print("{} jobs running and {} jobs pending, waiting...".format(num_running, num_pending))
             time.sleep(self.wait_time)
 
-        subprocess.run(['sbatch', self.slrm_fname])
+        subprocess.run(['sbatch', slrm_fname])
 
-    def write_slurm(self, overrides):
+    def write_slurm(self, slrm_fname, overrides):
         # set up run directories
-        hydra_cwd = os.getcwd()
-        curr_cwd = get_original_cwd()
+        curr_cwd = os.getcwd()
         exec_path = os.path.join(curr_cwd, sys.argv[0])
 
         if self.env_type == 'conda':
-            venv_sh = 'conda activate {}'.format(self.env_name)
+            venv_sh = 'source activate {}'.format(self.env_name)
         elif self.env_type == 'venv':
             venv_sh = '. $HOME/venv/{}/bin/activate'.format(self.env_name)
         else:
             venv_sh = ''
-
         slurm_opts = ['#SBATCH --' + k.replace('_','-') + '=' + v for k, v in self.slurm_kwargs.items() if v is not None]
         slurm_opts = ['#!/bin/bash'] + slurm_opts
+
+        if self.modules is not None:
+            ml_sh = ' '.join(['module load'] + self.modules) + '\n'
+        else:
+            ml_sh = ''
 
         # TODO: add checkpoint symlinking
         sh_str = """
 {0}
-python3 {1} {2}""".format(
+{1}
+python3 {2} {3}""".format(
+                ml_sh,
                 venv_sh,
                 exec_path,
                 overrides,
             )
 
         # write slurm file
-        with open(self.slrm_fname, 'w') as slrmf:
+        with open(slrm_fname, 'w') as slrmf:
             slrmf.write('\n'.join(slurm_opts) + '\n')
             slrmf.write(sh_str)
 
@@ -258,22 +218,66 @@ python3 {1} {2}""".format(
         Path(str(sweep_dir)).mkdir(parents=True, exist_ok=True)
         log.info("Launching {} jobs on slurm".format(len(job_overrides)))
         runs = []
+
+        # tag with extra tags and idx to ensure no overlap
+        tags = getattr(self.config, 'tags', None)
+        has_tags = (tags is not None and len(tags) != 0)
+        #TODO: assert tag is a list here
+        if not has_tags:
+            # load tags automatically from overrides
+            multi_overrides = self.config.hydra.overrides
+            tags = []
+            for v in multi_overrides.values():
+                for o in v:
+                    key, vals = o.split('=')
+                    # a bit janky but check if val is a list or dict
+                    if (vals[0] == '[' and vals[-1] == ']') or \
+                       (vals[0] == '{' and vals[-1] == '}'):
+                           continue
+                    elif ',' in vals:
+                        tags.append(key.split('.')[-1] + '=${{{}}}'.format(key))
+
         for idx, overrides in enumerate(job_overrides):
             idx = initial_job_idx + idx
-            lst = " ".join(self.filter_overrides(overrides))
-            log.info(f"\t#{idx} : {lst}")
             sweep_config = self.hydra_context.config_loader.load_sweep_config(
                 self.config, list(overrides)
             )
+
+            # add tags to sweep_config for resolution
+            if not has_tags:
+                OmegaConf.update(sweep_config, 'tags', tags)
+
+            tag = ','.join([str(t) for t in sweep_config.tags])
+
+            # add manual override to launcher
+            if not has_tags:
+                overrides.append('tags=[{}]'.format(tag))
+
+            import pdb; pdb.set_trace()
+
+            job_dir = os.path.join(self.job_dir, tag)
+
+            # set up run directories
+            log_dir = os.path.join(job_dir, "log")
+            Path(log_dir).mkdir(parents=True, exist_ok=True)
+            self.slurm_kwargs['output'] = os.path.join(job_dir, 'log/%j.out')
+            self.slurm_kwargs['error'] = os.path.join(job_dir, 'log/%j.err')
+            self.slurm_kwargs['job_name'] = self.job_name + '/' + tag
+
+            slrm_fname = os.path.join(job_dir, 'launch.slrm')
+            overrides = self.filter_overrides(overrides)
+            self.write_slurm(slrm_fname, " ".join(overrides))
 
             with open_dict(sweep_config):
                 sweep_config.hydra.job.id = f"job_id_for_{idx}"
                 sweep_config.hydra.job.num = idx
             HydraConfig.instance().set_config(sweep_config)
-            log.info("\tJob name : {}".format(self.job_name))
 
-            self.write_slurm(" ".join(self.filter_overrides(overrides)))
-            self.launch_job()
+            lst = " ".join(overrides)
+            log.info(f"\t#{idx} : {lst}")
+            log.info("\tJob tag: {}".format(tag))
+
+            self.launch_job(slrm_fname)
 
             configure_log(self.config.hydra.hydra_logging, self.config.hydra.verbose)
         return runs

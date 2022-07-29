@@ -6,13 +6,13 @@ with open("README.md", "r") as fh:
     LONG_DESC = fh.read()
     setup(
         name="hydra-slurm-launcher",
-        version="1.0.0",
-        author="Omry Yadan",
-        author_email="omry@fb.com",
-        description="Example Hydra Launcher plugin",
+        version="0.1.0",
+        author="Nathan Ng",
+        author_email="nathanng@mit.edu",
+        description="Slurm Hydra Launcher plugin",
         long_description=LONG_DESC,
         long_description_content_type="text/markdown",
-        url="https://github.com/facebookresearch/hydra/",
+        url="https://github.com/nng555/slurmlauncher/",
         packages=find_namespace_packages(include=["hydra_plugins.*"]),
         classifiers=[
             # Feel free to use another license.

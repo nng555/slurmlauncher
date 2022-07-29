@@ -1,3 +1,27 @@
 defaults:
   - db: mysql
-  - override hydra/launcher: example
+  - override hydra/launcher: slurm
+
+tags: ~
+
+hydra:
+  launcher:
+    cpus_per_task: 3
+    job_name: ${hydra.job.name}
+    mem: 25G
+    partition: gpu
+    gres: gpu:1
+
+##### SUGGESTED HYDRA CONFIG ###########################
+hydra:
+  sweep: 
+    # subdir is built dynamically using the tags
+    dir: ${oc.env:HOME}/slurm/${now:%Y-%m-%d}/${hydra.job.name}
+  run:
+    # once we're running set tags from conf
+    dir: ${hydra.sweep.dir}/${join:${oc.select:tags,[]}}
+  job_logging:
+    handlers:
+      file:
+        filename: log/${oc.env:SLURM_JOB_ID,local}.log
+########################################################
