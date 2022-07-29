@@ -7,11 +7,7 @@ To install, clone the repository then run:
 pip install -e .
 ```
 
-# Using the Launcher
-
-This slurm launcher acts as a layer of abstraction on top of a system for autogenerating `.slrm` files and launching slurm jobs as well as specifying subdirectories. It presents a simple way to run many sets of repeatable experiments and organize the outputs with minimal overhead. The core of the plugin is the hydra configuration file.
-
-## Quickstart
+# Quickstart
 
 If you simply want to launch an existing python script to a SLURM cluster using this plugin, follow these steps. An example script and configuration can be found in the `example/` folder.
 
@@ -39,6 +35,10 @@ More details on [overrides](https://hydra.cc/docs/tutorials/basic/your_first_app
 ```
 python my_app.py -m
 ```
+
+# Using the Launcher
+
+This slurm launcher acts as a layer of abstraction on top of a system for autogenerating `.slrm` files and launching slurm jobs as well as specifying subdirectories. It presents a simple way to run many sets of repeatable experiments and organize the outputs with minimal overhead. The core of the plugin is the hydra configuration file.
 
 ## Setting up the Configuration
 
