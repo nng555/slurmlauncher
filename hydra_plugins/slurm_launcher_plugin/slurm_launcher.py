@@ -22,7 +22,7 @@ from hydra.core.config_store import ConfigStore
 from hydra.core.singleton import Singleton
 from hydra.plugins.launcher import Launcher
 from hydra.types import TaskFunction
-from omegaconf import DictConfig, open_dict, MISSING, OmegaConf
+from omegaconf import DictConfig, open_dict, MISSING, OmegaConf, ListConfig
 
 # IMPORTANT:
 # If your plugin imports any module that takes more than a fraction of a second to import,
@@ -60,6 +60,9 @@ class SlurmConfig:
     job_dir: str = '${hydra.sweep.dir}'
     modules: Optional[str] = None
     time: Optional[str] = None
+    date: str = datetime.datetime.now().strftime('%Y-%m-%d')
+    override_tags: bool = False
+
 
 ConfigStore.instance().store(
     group="hydra/launcher", name="slurm", node=SlurmConfig,
@@ -88,6 +91,8 @@ class SlurmLauncher(Launcher):
                  job_dir: str,
                  modules: str,
                  time: str,
+                 date: str,
+                 override_tags: bool,
     ) -> None:
         self.config: Optional[DictConfig] = None
         self.task_function: Optional[TaskFunction] = None
@@ -95,6 +100,8 @@ class SlurmLauncher(Launcher):
 
         self.job_name = job_name
         self.job_dir = job_dir
+
+        self.date = date
 
         if modules is not None:
             self.modules = modules.split(',')
@@ -124,6 +131,8 @@ class SlurmLauncher(Launcher):
         self.env_type = env_type
         self.env_name = env_name
 
+        self.override_tags = override_tags
+
     def setup(
         self,
         *,
@@ -147,10 +156,12 @@ class SlurmLauncher(Launcher):
             opt, val = overrides[i].split('=', 1)
             if "$" in val:
                 val = val.replace('$', '\$')
-            else:
-                overrides[i] = '='.join([opt, '"' + val + '"'])
 
-        return [x for x in overrides if not x.startswith("hydra.")]
+            #else:
+            #    overrides[i] = '='.join([opt, '"' + val + '"'])
+
+        # don't remove hydra overrides?
+        return overrides
 
     def launch_job(self, slrm_fname):
         # launch safe only when < 100 jobs running
@@ -220,13 +231,18 @@ python3 {2} {3}""".format(
         runs = []
 
         # tag with extra tags and idx to ensure no overlap
-        tags = getattr(self.config, 'tags', None)
-        has_tags = (tags is not None and len(tags) != 0)
-        #TODO: assert tag is a list here
-        if not has_tags:
+        tags = getattr(self.config, 'tags', [])
+        if tags is None:
+            tags = []
+        assert isinstance(tags, list) or isinstance(tags, ListConfig), \
+                'tags must be a list if specified'
+        has_tags = len(tags) != 0
+
+        # get sweep tags if not present or if not overridden
+        if not has_tags or not self.override_tags:
             # load tags automatically from overrides
             multi_overrides = self.config.hydra.overrides
-            tags = []
+            sweep_tags = []
             for v in multi_overrides.values():
                 for o in v:
                     key, vals = o.split('=')
@@ -235,7 +251,10 @@ python3 {2} {3}""".format(
                        (vals[0] == '{' and vals[-1] == '}'):
                            continue
                     elif ',' in vals:
-                        tags.append(key.split('.')[-1] + '=${{{}}}'.format(key))
+                        assert 'tags' not in vals, 'tags cannot be swept over'
+                        sweep_tags.append(key.split('.')[-1] + '_${{{}}}'.format(key))
+            if not self.override_tags:
+                tags.extend(sweep_tags)
 
         for idx, overrides in enumerate(job_overrides):
             idx = initial_job_idx + idx
@@ -243,17 +262,17 @@ python3 {2} {3}""".format(
                 self.config, list(overrides)
             )
 
-            # add tags to sweep_config for resolution
-            if not has_tags:
+            if len(tags) > 0:
                 OmegaConf.update(sweep_config, 'tags', tags)
-
-            tag = ','.join([str(t) for t in sweep_config.tags])
+                tag = ','.join([str(t) for t in sweep_config.tags])
+            else:
+                tag = str(idx)
 
             # add manual override to launcher
-            if not has_tags:
-                overrides.append('tags=[{}]'.format(tag))
+            overrides.append('tags=[{}]'.format(tag))
 
-            import pdb; pdb.set_trace()
+            # manual override date in case we launch at a different day than we schedule
+            overrides.append('hydra.launcher.date={}'.format(self.date))
 
             job_dir = os.path.join(self.job_dir, tag)
 
@@ -276,7 +295,6 @@ python3 {2} {3}""".format(
             lst = " ".join(overrides)
             log.info(f"\t#{idx} : {lst}")
             log.info("\tJob tag: {}".format(tag))
-
             self.launch_job(slrm_fname)
 
             configure_log(self.config.hydra.hydra_logging, self.config.hydra.verbose)
