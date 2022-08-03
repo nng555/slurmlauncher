@@ -1,4 +1,5 @@
 from dataclasses import dataclass
+from enum import Enum
 
 import sys
 import subprocess
@@ -34,6 +35,10 @@ from omegaconf import DictConfig, open_dict, MISSING, OmegaConf, ListConfig
 
 log = logging.getLogger(__name__)
 
+class Cluster(Enum):
+    SLURM = 0
+    LSF = 1
+
 @dataclass
 class SlurmConfig:
     _target_: str = (
@@ -47,7 +52,7 @@ class SlurmConfig:
     nodes: int = 1
     ntasks_per_node: int = 1
     open_mode: str = 'append'
-    partition: str = MISSING
+    partition: Optional[str] = None
     account: Optional[str] = None
     qos: Optional[str] = None
     max_running: int = -1
@@ -62,7 +67,7 @@ class SlurmConfig:
     time: Optional[str] = None
     date: str = datetime.datetime.now().strftime('%Y-%m-%d')
     override_tags: bool = False
-
+    cluster: Cluster = Cluster.SLURM
 
 ConfigStore.instance().store(
     group="hydra/launcher", name="slurm", node=SlurmConfig,
@@ -93,10 +98,15 @@ class SlurmLauncher(Launcher):
                  time: str,
                  date: str,
                  override_tags: bool,
+                 cluster: Cluster,
     ) -> None:
         self.config: Optional[DictConfig] = None
         self.task_function: Optional[TaskFunction] = None
         self.hydra_context: Optional[HydraContext] = None
+
+        self.cluster = cluster
+        if partition is None and self.cluster == Cluster.SLURM:
+            raise Exception("Partition required for slurm clusters")
 
         self.job_name = job_name
         self.job_dir = job_dir
@@ -108,19 +118,28 @@ class SlurmLauncher(Launcher):
         else:
             self.modules = None
 
-        self.slurm_kwargs = {
-                'cpus_per_task': str(cpus_per_task),
-                'exclude': exclude,
-                'gres': gres,
-                'mem': mem,
-                'nodes': str(nodes),
-                'ntasks_per_node': str(ntasks_per_node),
-                'open_mode': open_mode,
-                'partition': partition,
-                'account': account,
-                'qos': qos,
-                'time': time,
-        }
+        if self.cluster == Cluster.SLURM:
+            self.batch_kwargs = {
+                    'cpus_per_task': str(cpus_per_task),
+                    'exclude': exclude,
+                    'gres': gres,
+                    'mem': mem,
+                    'nodes': str(nodes),
+                    'ntasks_per_node': str(ntasks_per_node),
+                    'open_mode': open_mode,
+                    'partition': partition,
+                    'account': account,
+                    'qos': qos,
+                    'time': time,
+            }
+        else:
+            self.batch_kwargs = {
+                'R': f'\"rusage[mem={mem}:duration=24h] span[ptile={cpus_per_task}]\"',
+                'gpu': f'num={gres[-1]}',
+                'n': str(ntasks_per_node),
+                'q': qos,
+                #'nnodes': str(nodes),
+            }
 
         self.max_running = max_running
         self.max_pending = max_pending
@@ -163,13 +182,19 @@ class SlurmLauncher(Launcher):
         # don't remove hydra overrides?
         return overrides
 
-    def launch_job(self, slrm_fname):
+    def launch_job(self, batch_fname):
         # launch safe only when < 100 jobs running
         while(True):
-            num_running = int(subprocess.run('squeue -u $USER | grep R | wc -l',
-                shell=True, stdout=subprocess.PIPE).stdout.decode('utf-8')) - 1
-            num_pending = int(subprocess.run('squeue -u $USER | grep PD | wc -l',
-                shell=True, stdout=subprocess.PIPE).stdout.decode('utf-8'))
+            if self.cluster == Cluster.SLURM:
+                num_running = int(subprocess.run('squeue -u $USER | grep R | wc -l',
+                    shell=True, stdout=subprocess.PIPE).stdout.decode('utf-8')) - 1
+                num_pending = int(subprocess.run('squeue -u $USER | grep PD | wc -l',
+                    shell=True, stdout=subprocess.PIPE).stdout.decode('utf-8'))
+            else:
+                num_running = int(subprocess.run('bjobs -u $USER | grep RUN | wc -l',
+                    shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE).stdout.decode('utf-8')) - 1
+                num_pending = int(subprocess.run('bjobs -u $USER | grep PEND | wc -l',
+                    shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE).stdout.decode('utf-8'))
             num_total = num_running + num_pending
 
             if (self.max_running == -1 or num_running < self.max_running) and \
@@ -179,9 +204,13 @@ class SlurmLauncher(Launcher):
             print("{} jobs running and {} jobs pending, waiting...".format(num_running, num_pending))
             time.sleep(self.wait_time)
 
-        subprocess.run(['sbatch', slrm_fname])
+        if self.cluster == Cluster.SLURM:
+            subprocess.run(['sbatch', batch_fname])
+        elif self.cluster == Cluster.LSF:
+            with open(batch_fname, 'r') as infile:
+                subprocess.run(['bsub'], stdin=infile)
 
-    def write_slurm(self, slrm_fname, overrides):
+    def write_batch(self, batch_fname, overrides):
         # set up run directories
         curr_cwd = os.getcwd()
         exec_path = os.path.join(curr_cwd, sys.argv[0])
@@ -192,8 +221,12 @@ class SlurmLauncher(Launcher):
             venv_sh = '. $HOME/venv/{}/bin/activate'.format(self.env_name)
         else:
             venv_sh = ''
-        slurm_opts = ['#SBATCH --' + k.replace('_','-') + '=' + v for k, v in self.slurm_kwargs.items() if v is not None]
-        slurm_opts = ['#!/bin/bash'] + slurm_opts
+
+        if self.cluster == Cluster.SLURM:
+            batch_opts = ['#SBATCH --' + k.replace('_','-') + '=' + v for k, v in self.batch_kwargs.items() if v is not None]
+        elif self.cluster == Cluster.LSF:
+            batch_opts =  ['#BSUB -' + k.replace('_','-') + ' ' + v for k, v in self.batch_kwargs.items() if v is not None]
+        batch_opts = ['#!/bin/bash'] + batch_opts
 
         if self.modules is not None:
             ml_sh = ' '.join(['module load'] + self.modules) + '\n'
@@ -212,9 +245,9 @@ python3 {2} {3}""".format(
             )
 
         # write slurm file
-        with open(slrm_fname, 'w') as slrmf:
-            slrmf.write('\n'.join(slurm_opts) + '\n')
-            slrmf.write(sh_str)
+        with open(batch_fname, 'w') as batchf:
+            batchf.write('\n'.join(batch_opts) + '\n')
+            batchf.write(sh_str)
 
     def launch(
         self, job_overrides: Sequence[Sequence[str]], initial_job_idx: int
@@ -227,7 +260,8 @@ python3 {2} {3}""".format(
         configure_log(self.config.hydra.hydra_logging, self.config.hydra.verbose)
         sweep_dir = self.config.hydra.sweep.dir
         Path(str(sweep_dir)).mkdir(parents=True, exist_ok=True)
-        log.info("Launching {} jobs on slurm".format(len(job_overrides)))
+        log.info("Launching {} jobs on {}".format(len(job_overrides), self.cluster.name))
+        log.info("Job name {}".format(self.job_name))
         runs = []
 
         # tag with extra tags and idx to ensure no overlap
@@ -279,13 +313,18 @@ python3 {2} {3}""".format(
             # set up run directories
             log_dir = os.path.join(job_dir, "log")
             Path(log_dir).mkdir(parents=True, exist_ok=True)
-            self.slurm_kwargs['output'] = os.path.join(job_dir, 'log/%j.out')
-            self.slurm_kwargs['error'] = os.path.join(job_dir, 'log/%j.err')
-            self.slurm_kwargs['job_name'] = self.job_name + '/' + tag
+            if self.cluster == Cluster.SLURM:
+                self.batch_kwargs['output'] = os.path.join(job_dir, 'log/%j.out')
+                self.batch_kwargs['error'] = os.path.join(job_dir, 'log/%j.err')
+                self.batch_kwargs['job_name'] = self.job_name + '/' + tag
+            else:
+                self.batch_kwargs['o'] = os.path.join(job_dir, 'log/%J.out')
+                self.batch_kwargs['e'] = os.path.join(job_dir, 'log/%J.err')
+                self.batch_kwargs['J'] = self.job_name + '/' + tag
 
-            slrm_fname = os.path.join(job_dir, 'launch.slrm')
+            batch_fname = os.path.join(job_dir, 'launch.sh')
             overrides = self.filter_overrides(overrides)
-            self.write_slurm(slrm_fname, " ".join(overrides))
+            self.write_batch(batch_fname, " ".join(overrides))
 
             with open_dict(sweep_config):
                 sweep_config.hydra.job.id = f"job_id_for_{idx}"
@@ -295,7 +334,7 @@ python3 {2} {3}""".format(
             lst = " ".join(overrides)
             log.info(f"\t#{idx} : {lst}")
             log.info("\tJob tag: {}".format(tag))
-            self.launch_job(slrm_fname)
+            self.launch_job(batch_fname)
 
             configure_log(self.config.hydra.hydra_logging, self.config.hydra.verbose)
         return runs
