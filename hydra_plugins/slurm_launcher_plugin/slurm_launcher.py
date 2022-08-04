@@ -8,7 +8,6 @@ import logging
 import datetime
 from pathlib import Path
 from typing import Optional, Sequence
-from hydra.utils import get_original_cwd
 from hydra.core.utils import (
     JobReturn,
     configure_log,
@@ -201,7 +200,7 @@ class SlurmLauncher(Launcher):
                (self.max_pending == -1 or num_pending < self.max_pending) and \
                (self.max_total == -1 or num_total < self.max_total):
                    break
-            print("{} jobs running and {} jobs pending, waiting...".format(num_running, num_pending))
+            log.info("{} jobs running and {} jobs pending, waiting {} seconds...".format(num_running, num_pending, self.wait_time))
             time.sleep(self.wait_time)
 
         if self.cluster == Cluster.SLURM:
@@ -215,39 +214,46 @@ class SlurmLauncher(Launcher):
         curr_cwd = os.getcwd()
         exec_path = os.path.join(curr_cwd, sys.argv[0])
 
-        if self.env_type == 'conda':
-            venv_sh = 'source activate {}'.format(self.env_name)
-        elif self.env_type == 'venv':
-            venv_sh = '. $HOME/venv/{}/bin/activate'.format(self.env_name)
-        else:
-            venv_sh = ''
+        run_lines = []
 
+        # job options
         if self.cluster == Cluster.SLURM:
             batch_opts = ['#SBATCH --' + k.replace('_','-') + '=' + v for k, v in self.batch_kwargs.items() if v is not None]
         elif self.cluster == Cluster.LSF:
             batch_opts =  ['#BSUB -' + k.replace('_','-') + ' ' + v for k, v in self.batch_kwargs.items() if v is not None]
         batch_opts = ['#!/bin/bash'] + batch_opts
+        run_lines.append('\n'.join(batch_opts) + '\n')
 
+        # load modules
         if self.modules is not None:
             ml_sh = ' '.join(['module load'] + self.modules) + '\n'
         else:
             ml_sh = ''
+        run_lines.append(ml_sh)
 
-        # TODO: add checkpoint symlinking
-        sh_str = """
-{0}
-{1}
-python3 {2} {3}""".format(
-                ml_sh,
-                venv_sh,
-                exec_path,
-                overrides,
-            )
+        # load environment
+        if self.env_type == 'conda':
+            venv_sh = 'conda deactivate\nsource activate {}\n'.format(self.env_name)
+        elif self.env_type == 'venv':
+            venv_sh = '. $HOME/venv/{}/bin/activate\n'.format(self.env_name)
+        else:
+            venv_sh = ''
+        run_lines.append(venv_sh)
 
-        # write slurm file
+        # set env variables
+        if self.cluster == Cluster.SLURM:
+            job_id_name = 'SLURM_JOB_ID'
+        elif self.cluster == Cluster.LSF:
+            job_id_name = 'LSB_JOBID'
+        env_sh = 'export JOBID=${}\n'.format(job_id_name)
+        run_lines.append(env_sh)
+
+        # run script
+        run_lines.append('python3 {} {}\n'.format(exec_path, overrides))
+
+        # write batch submission file
         with open(batch_fname, 'w') as batchf:
-            batchf.write('\n'.join(batch_opts) + '\n')
-            batchf.write(sh_str)
+            batchf.writelines(run_lines)
 
     def launch(
         self, job_overrides: Sequence[Sequence[str]], initial_job_idx: int
@@ -261,7 +267,7 @@ python3 {2} {3}""".format(
         sweep_dir = self.config.hydra.sweep.dir
         Path(str(sweep_dir)).mkdir(parents=True, exist_ok=True)
         log.info("Launching {} jobs on {}".format(len(job_overrides), self.cluster.name))
-        log.info("Job name {}".format(self.job_name))
+        log.info("Job name: {}".format(self.job_name))
         runs = []
 
         # tag with extra tags and idx to ensure no overlap
@@ -321,6 +327,7 @@ python3 {2} {3}""".format(
                 self.batch_kwargs['o'] = os.path.join(job_dir, 'log/%J.out')
                 self.batch_kwargs['e'] = os.path.join(job_dir, 'log/%J.err')
                 self.batch_kwargs['J'] = self.job_name + '/' + tag
+                self.batch_kwargs['cwd'] = job_dir
 
             batch_fname = os.path.join(job_dir, 'launch.sh')
             overrides = self.filter_overrides(overrides)
@@ -332,8 +339,8 @@ python3 {2} {3}""".format(
             HydraConfig.instance().set_config(sweep_config)
 
             lst = " ".join(overrides)
-            log.info(f"\t#{idx} : {lst}")
-            log.info("\tJob tag: {}".format(tag))
+            log.info(f"\t#{idx} : {tag}")
+            #log.info("\tJob tag: {}".format(tag))
             self.launch_job(batch_fname)
 
             configure_log(self.config.hydra.hydra_logging, self.config.hydra.verbose)
