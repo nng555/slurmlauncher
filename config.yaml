@@ -17,9 +17,5 @@ hydra:
   run:
     # once we're running set tags from conf
     dir: ${hydra.sweep.dir}/${join:${tags}}
-  job_logging:
-    handlers:
-      file:
-        filename: log/${oc.env:JOBID,local}.log
 ########################################################
 
