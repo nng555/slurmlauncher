@@ -83,10 +83,6 @@ hydra:
   run:
     # once we're running set tags from conf
     dir: ${hydra.sweep.dir}/${join:${oc.select:tags,[]}}
-  job_logging:
-    handlers:
-      file:
-        filename: log/${oc.env:SLURM_JOB_ID,local}.log
 ```
 
 ## `tags` Configuration
