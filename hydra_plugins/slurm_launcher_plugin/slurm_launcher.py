@@ -118,27 +118,30 @@ class SlurmLauncher(Launcher):
             self.modules = None
 
         if self.cluster == Cluster.SLURM:
-            self.batch_kwargs = {
-                    'cpus_per_task': str(cpus_per_task),
-                    'exclude': exclude,
-                    'gres': gres,
-                    'mem': mem,
-                    'nodes': str(nodes),
-                    'ntasks_per_node': str(ntasks_per_node),
-                    'open_mode': open_mode,
-                    'partition': partition,
-                    'account': account,
-                    'qos': qos,
-                    'time': time,
-            }
+            self.batch_kwargs = [
+                ('cpus_per_task', str(cpus_per_task)),
+                ('exclude', exclude),
+                ('gres', gres),
+                ('mem', mem),
+                ('nodes', str(nodes)),
+                ('ntasks_per_node', str(ntasks_per_node)),
+                ('open_mode', open_mode),
+                ('partition', partition),
+                ('account', account),
+                ('qos', qos),
+                ('time', time),
+            ]
         else:
-            self.batch_kwargs = {
-                'R': f'\"rusage[mem={mem}:duration=24h] span[ptile={cpus_per_task}]\"',
-                'gpu': f'num={gres[-1]}',
-                'n': str(ntasks_per_node),
-                'q': qos,
+            ex_nodes = ' && '.join(['hname!=' + node for node in exclude.split(',')])
+            self.batch_kwargs = [
+                ('R', f'"rusage[mem={mem}:duration=24h]"'),
+                ('R', f'"span[ptile={cpus_per_task}] {ex_nodes}"'),
+                # exclusive process by default so we don't clash with other jobs
+                ('gpu', f'"num={gres[-1]}:mode=exclusive_process"'),
+                ('n', str(ntasks_per_node)),
+                ('q', qos),
                 #'nnodes': str(nodes),
-            }
+            ]
 
         self.max_running = max_running
         self.max_pending = max_pending
@@ -174,9 +177,8 @@ class SlurmLauncher(Launcher):
             opt, val = overrides[i].split('=', 1)
             if "$" in val:
                 val = val.replace('$', '\$')
-
-            #else:
-            #    overrides[i] = '='.join([opt, '"' + val + '"'])
+            else:
+                overrides[i] = '='.join([opt, '"' + val + '"'])
 
         # don't remove hydra overrides?
         return overrides
@@ -209,19 +211,19 @@ class SlurmLauncher(Launcher):
             with open(batch_fname, 'r') as infile:
                 subprocess.run(['bsub'], stdin=infile)
 
-    def write_batch(self, batch_fname, overrides):
+    def write_batch(self, batch_fname, overrides, add_kwargs):
         # set up run directories
         curr_cwd = os.getcwd()
         exec_path = os.path.join(curr_cwd, sys.argv[0])
 
-        run_lines = []
+        run_lines = ['#!/bin/bash\n']
 
         # job options
         if self.cluster == Cluster.SLURM:
-            batch_opts = ['#SBATCH --' + k.replace('_','-') + '=' + v for k, v in self.batch_kwargs.items() if v is not None]
+            opt_key = '#SBATCH --'
         elif self.cluster == Cluster.LSF:
-            batch_opts =  ['#BSUB -' + k.replace('_','-') + ' ' + v for k, v in self.batch_kwargs.items() if v is not None]
-        batch_opts = ['#!/bin/bash'] + batch_opts
+            opt_key = '#BSUB -'
+        batch_opts =  [opt_key + k.replace('_','-') + ' ' + v for (k, v) in (self.batch_kwargs + add_kwargs) if v is not None]
         run_lines.append('\n'.join(batch_opts) + '\n')
 
         # load modules
@@ -286,15 +288,18 @@ class SlurmLauncher(Launcher):
             for v in multi_overrides.values():
                 for o in v:
                     key, vals = o.split('=')
-                    # a bit janky but check if val is a list or dict
+                    # a bit janky but check if val is a list or dict or string
                     if (vals[0] == '[' and vals[-1] == ']') or \
-                       (vals[0] == '{' and vals[-1] == '}'):
+                       (vals[0] == '{' and vals[-1] == '}') or \
+                       (vals[0] == '"' and vals[-1] == '"') or \
+                       (vals[0] == "'" and vals[-1] == "'"):
                            continue
                     elif ',' in vals:
                         assert 'tags' not in vals, 'tags cannot be swept over'
                         sweep_tags.append(key.split('.')[-1] + '_${{{}}}'.format(key))
             if not self.override_tags:
                 tags.extend(sweep_tags)
+        tags.sort()
 
         for idx, overrides in enumerate(job_overrides):
             idx = initial_job_idx + idx
@@ -319,19 +324,20 @@ class SlurmLauncher(Launcher):
             # set up run directories
             log_dir = os.path.join(job_dir, "log")
             Path(log_dir).mkdir(parents=True, exist_ok=True)
+            add_kwargs = []
             if self.cluster == Cluster.SLURM:
-                self.batch_kwargs['output'] = os.path.join(job_dir, 'log/%j.out')
-                self.batch_kwargs['error'] = os.path.join(job_dir, 'log/%j.err')
-                self.batch_kwargs['job_name'] = self.job_name + '/' + tag
+                add_kwargs.append(('output', os.path.join(job_dir, 'log/%j.out')))
+                add_kwargs.append(('error', os.path.join(job_dir, 'log/%j.err')))
+                add_kwargs.append(('job_name', self.job_name + '/' + tag))
             else:
-                self.batch_kwargs['o'] = os.path.join(job_dir, 'log/%J.out')
-                self.batch_kwargs['e'] = os.path.join(job_dir, 'log/%J.err')
-                self.batch_kwargs['J'] = self.job_name + '/' + tag
-                self.batch_kwargs['cwd'] = job_dir
+                add_kwargs.append(('o', os.path.join(job_dir, 'log/%J.out')))
+                add_kwargs.append(('e', os.path.join(job_dir, 'log/%J.err')))
+                add_kwargs.append(('J', self.job_name + '/' + tag))
+                add_kwargs.append(('cwd', job_dir))
 
             batch_fname = os.path.join(job_dir, 'launch.sh')
             overrides = self.filter_overrides(overrides)
-            self.write_batch(batch_fname, " ".join(overrides))
+            self.write_batch(batch_fname, " ".join(overrides), add_kwargs)
 
             with open_dict(sweep_config):
                 sweep_config.hydra.job.id = f"job_id_for_{idx}"
