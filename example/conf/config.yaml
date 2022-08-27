@@ -7,7 +7,6 @@ tags: ~
 hydra:
   launcher:
     cpus_per_task: 3
-    job_name: ${hydra.job.name}
     mem: 25G
     partition: gpu
     gres: gpu:1
