@@ -8,9 +8,7 @@ hydra:
     gres: ???
     mem: ???
     partition: ???
-
 ##### SUGGESTED HYDRA CONFIG ###########################
-hydra:
   sweep: 
     # subdir is built dynamically using the tags
     dir: ${oc.env:HOME}/slurm/${oc.select:hydra.launcher.date,${now:%Y-%m-%d}}/${hydra.job.name}
