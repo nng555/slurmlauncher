@@ -10,9 +10,7 @@ hydra:
     mem: 25G
     partition: gpu
     gres: gpu:1
-
 ##### SUGGESTED HYDRA CONFIG ###########################
-hydra:
   sweep: 
     # subdir is built dynamically using the tags
     dir: ${oc.env:HOME}/slurm/${now:%Y-%m-%d}/${hydra.job.name}
