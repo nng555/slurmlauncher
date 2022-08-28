@@ -66,6 +66,7 @@ class SlurmConfig:
     time: Optional[str] = None
     date: str = datetime.datetime.now().strftime('%Y-%m-%d')
     override_tags: bool = False
+    sort_tags: bool = True
     cluster: Cluster = Cluster.SLURM
 
 ConfigStore.instance().store(
@@ -97,6 +98,7 @@ class SlurmLauncher(Launcher):
                  time: str,
                  date: str,
                  override_tags: bool,
+                 sort_tags: bool,
                  cluster: Cluster,
     ) -> None:
         self.config: Optional[DictConfig] = None
@@ -118,6 +120,8 @@ class SlurmLauncher(Launcher):
             self.modules = None
 
         if self.cluster == Cluster.SLURM:
+            assert partition is not None, "Must provide partition when using SLURM"
+            assert cpus_per_task is not None, "Must provide cpus_per_task when using SLURM"
             self.batch_kwargs = [
                 ('cpus_per_task', str(cpus_per_task)),
                 ('exclude', exclude),
@@ -153,6 +157,7 @@ class SlurmLauncher(Launcher):
         self.env_name = env_name
 
         self.override_tags = override_tags
+        self.sort_tags = sort_tags
 
     def setup(
         self,
@@ -234,13 +239,14 @@ class SlurmLauncher(Launcher):
         run_lines.append(ml_sh)
 
         # load environment
-        if self.env_type == 'conda':
-            venv_sh = 'conda deactivate\nsource activate {}\n'.format(self.env_name)
-        elif self.env_type == 'venv':
-            venv_sh = '. $HOME/venv/{}/bin/activate\n'.format(self.env_name)
-        else:
-            venv_sh = ''
-        run_lines.append(venv_sh)
+        if self.env_name is not None:
+            if self.env_type == 'conda':
+                venv_sh = 'conda deactivate\nsource activate {}\n'.format(self.env_name)
+            elif self.env_type == 'venv':
+                venv_sh = '. $HOME/venv/{}/bin/activate\n'.format(self.env_name)
+            else:
+                venv_sh = ''
+            run_lines.append(venv_sh)
 
         # set env variables
         if self.cluster == Cluster.SLURM:
@@ -278,13 +284,12 @@ class SlurmLauncher(Launcher):
             tags = []
         assert isinstance(tags, list) or isinstance(tags, ListConfig), \
                 'tags must be a list if specified'
-        has_tags = len(tags) != 0
 
-        # get sweep tags if not present or if not overridden
-        if not has_tags or not self.override_tags:
-            # load tags automatically from overrides
+        sweep_keys = []
+        # get keys we're sweeping over if not present or if not overridden
+        if not self.override_tags:
+            # get keys automatically from overrides
             multi_overrides = self.config.hydra.overrides
-            sweep_tags = []
             for v in multi_overrides.values():
                 for o in v:
                     key, vals = o.split('=')
@@ -295,11 +300,8 @@ class SlurmLauncher(Launcher):
                        (vals[0] == "'" and vals[-1] == "'"):
                            continue
                     elif ',' in vals:
-                        assert 'tags' not in vals, 'tags cannot be swept over'
-                        sweep_tags.append(key.split('.')[-1] + '_${{{}}}'.format(key))
-            if not self.override_tags:
-                tags.extend(sweep_tags)
-        tags.sort()
+                        assert vals != 'tags', 'tags cannot be swept over'
+                        sweep_keys.append(key)
 
         for idx, overrides in enumerate(job_overrides):
             idx = initial_job_idx + idx
@@ -307,8 +309,22 @@ class SlurmLauncher(Launcher):
                 self.config, list(overrides)
             )
 
-            if len(tags) > 0:
-                OmegaConf.update(sweep_config, 'tags', tags)
+            sweep_tags = tags.copy()
+
+            # if not override then autopopulate from values
+            if not self.override_tags:
+                for job_or in sweep_config.hydra.overrides.task:
+                    okey, val = job_or.split('=')
+                    if okey in sweep_keys:
+                        if '.' in okey:
+                            okey = okey.split('.')[-1]
+                        sweep_tags.append(okey + '_' + val)
+
+            if self.sort_tags:
+                sweep_tags.sort()
+
+            if len(sweep_tags) > 0:
+                OmegaConf.update(sweep_config, 'tags', sweep_tags)
                 tag = ','.join([str(t) for t in sweep_config.tags])
             else:
                 tag = str(idx)
