@@ -79,10 +79,10 @@ More details are provided in the `tags` section below.
 hydra:
   sweep: 
     # subdir is built dynamically using the tags
-    dir: ${oc.env:HOME}/slurm/${now:%Y-%m-%d}/${hydra.job.name}
+    dir: ${oc.env:HOME}/slurm/${oc.select:hydra.launcher.date,${now:%Y-%m-%d}}/${hydra.job.name}
   run:
     # once we're running set tags from conf
-    dir: ${hydra.sweep.dir}/${join:${oc.select:tags,[]}}
+    dir: ${hydra.sweep.dir}/${join:${tags}}
 ```
 
 ## `tags` Configuration
