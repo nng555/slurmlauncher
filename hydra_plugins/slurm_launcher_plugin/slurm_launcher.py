@@ -345,6 +345,7 @@ class SlurmLauncher(Launcher):
                 add_kwargs.append(('output', os.path.join(job_dir, 'log/%j.out')))
                 add_kwargs.append(('error', os.path.join(job_dir, 'log/%j.err')))
                 add_kwargs.append(('job_name', self.job_name + '/' + tag))
+                add_kwargs.append(('chdir', job_dir))
             else:
                 add_kwargs.append(('o', os.path.join(job_dir, 'log/%J.out')))
                 add_kwargs.append(('e', os.path.join(job_dir, 'log/%J.err')))
