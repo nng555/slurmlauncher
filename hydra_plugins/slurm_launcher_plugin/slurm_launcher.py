@@ -316,6 +316,7 @@ class SlurmLauncher(Launcher):
         if self.append_choices and job_tags:
             sweep_dir = self.config.hydra.sweep.dir + ',' + ','.join(job_tags)
             self.job_name += ',' + ','.join(job_tags)
+            self.job_dir += ',' + ','.join(job_tags)
 
         Path(str(sweep_dir)).mkdir(parents=True, exist_ok=True)
         log.info("Job name: {}".format(self.job_name))
