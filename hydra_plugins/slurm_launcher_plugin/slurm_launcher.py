@@ -216,7 +216,7 @@ class SlurmLauncher(Launcher):
             with open(batch_fname, 'r') as infile:
                 subprocess.run(['bsub'], stdin=infile)
 
-    def write_batch(self, batch_fname, overrides, add_kwargs):
+    def write_batch(self, batch_fname, overrides, add_kwargs, job_name):
         # set up run directories
         curr_cwd = os.getcwd()
         exec_path = os.path.join(curr_cwd, sys.argv[0])
@@ -254,6 +254,7 @@ class SlurmLauncher(Launcher):
         elif self.cluster == Cluster.LSF:
             job_id_name = 'LSB_JOBID'
         env_sh = 'export JOBID=${}\n'.format(job_id_name)
+        env_sh += 'export WANDB_NAME={}\n'.format(job_name)
         run_lines.append(env_sh)
 
         # run script
@@ -282,8 +283,10 @@ class SlurmLauncher(Launcher):
         tags = getattr(self.config, 'tags', [])
         if tags is None:
             tags = []
+        if isinstance(tags, str):
+            tags = [tags]
         assert isinstance(tags, list) or isinstance(tags, ListConfig), \
-                'tags must be a list if specified'
+                'tags must be a string or list if specified'
 
         sweep_keys = []
         # get keys we're sweeping over if not present or if not overridden
@@ -308,6 +311,7 @@ class SlurmLauncher(Launcher):
             sweep_config = self.hydra_context.config_loader.load_sweep_config(
                 self.config, list(overrides)
             )
+            choices = sweep_config.hydra.runtime.choices
 
             sweep_tags = tags.copy()
 
@@ -315,10 +319,16 @@ class SlurmLauncher(Launcher):
             if not self.override_tags:
                 for job_or in sweep_config.hydra.overrides.task:
                     okey, val = job_or.split('=')
+                    # grab last bit of keys swept over
                     if okey in sweep_keys:
                         if '.' in okey:
                             okey = okey.split('.')[-1]
                         sweep_tags.append(okey + '_' + val)
+                    # grab last bit of defaults that are manually set
+                    elif okey in choices:
+                        if '/' in okey:
+                            okey = okey.split('/')[-1]
+                        sweep_tags.append(okey + '_' + choices[okey])
 
             if self.sort_tags:
                 sweep_tags.sort()
@@ -354,7 +364,7 @@ class SlurmLauncher(Launcher):
 
             batch_fname = os.path.join(job_dir, 'launch.sh')
             overrides = self.filter_overrides(overrides)
-            self.write_batch(batch_fname, " ".join(overrides), add_kwargs)
+            self.write_batch(batch_fname, " ".join(overrides), add_kwargs, tag)
 
             with open_dict(sweep_config):
                 sweep_config.hydra.job.id = f"job_id_for_{idx}"
