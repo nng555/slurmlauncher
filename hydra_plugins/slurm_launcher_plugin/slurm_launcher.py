@@ -66,6 +66,7 @@ class SlurmConfig:
     time: Optional[str] = None
     date: str = datetime.datetime.now().strftime('%Y-%m-%d')
     override_tags: bool = False
+    append_choices: bool = True
     sort_tags: bool = True
     cluster: Cluster = Cluster.SLURM
 
@@ -98,6 +99,7 @@ class SlurmLauncher(Launcher):
                  time: str,
                  date: str,
                  override_tags: bool,
+                 append_choices: bool,
                  sort_tags: bool,
                  cluster: Cluster,
     ) -> None:
@@ -158,6 +160,7 @@ class SlurmLauncher(Launcher):
 
         self.override_tags = override_tags
         self.sort_tags = sort_tags
+        self.append_choices = append_choices
 
     def setup(
         self,
@@ -273,11 +276,7 @@ class SlurmLauncher(Launcher):
         assert self.task_function is not None
 
         configure_log(self.config.hydra.hydra_logging, self.config.hydra.verbose)
-        sweep_dir = self.config.hydra.sweep.dir
-        Path(str(sweep_dir)).mkdir(parents=True, exist_ok=True)
         log.info("Launching {} jobs on {}".format(len(job_overrides), self.cluster.name))
-        log.info("Job name: {}".format(self.job_name))
-        runs = []
 
         # tag with extra tags and idx to ensure no overlap
         tags = getattr(self.config, 'tags', [])
@@ -289,10 +288,13 @@ class SlurmLauncher(Launcher):
                 'tags must be a string or list if specified'
 
         sweep_keys = []
+        job_tags = []
+
         # get keys we're sweeping over if not present or if not overridden
         if not self.override_tags:
             # get keys automatically from overrides
             multi_overrides = self.config.hydra.overrides
+            choices = self.config.hydra.runtime.choices
             for v in multi_overrides.values():
                 for o in v:
                     key, vals = o.split('=')
@@ -305,6 +307,19 @@ class SlurmLauncher(Launcher):
                     elif ',' in vals:
                         assert vals != 'tags', 'tags cannot be swept over'
                         sweep_keys.append(key)
+                    # add default overrides to job name
+                    elif key in choices:
+                        if '/' in key:
+                            key = key.split('/')[-1]
+                        job_tags.append(key + '_' + choices[key])
+
+        if self.append_choices and job_tags:
+            sweep_dir = self.config.hydra.sweep.dir + ',' + ','.join(job_tags)
+            self.job_name += ',' + ','.join(job_tags)
+
+        Path(str(sweep_dir)).mkdir(parents=True, exist_ok=True)
+        log.info("Job name: {}".format(self.job_name))
+        runs = []
 
         for idx, overrides in enumerate(job_overrides):
             idx = initial_job_idx + idx
@@ -324,11 +339,6 @@ class SlurmLauncher(Launcher):
                         if '.' in okey:
                             okey = okey.split('.')[-1]
                         sweep_tags.append(okey + '_' + val)
-                    # grab last bit of defaults that are manually set
-                    elif okey in choices:
-                        if '/' in okey:
-                            okey = okey.split('/')[-1]
-                        sweep_tags.append(okey + '_' + choices[okey])
 
             if self.sort_tags:
                 sweep_tags.sort()
@@ -364,7 +374,7 @@ class SlurmLauncher(Launcher):
 
             batch_fname = os.path.join(job_dir, 'launch.sh')
             overrides = self.filter_overrides(overrides)
-            self.write_batch(batch_fname, " ".join(overrides), add_kwargs, tag)
+            self.write_batch(batch_fname, " ".join(overrides), add_kwargs, self.job_name + '/' + tag)
 
             with open_dict(sweep_config):
                 sweep_config.hydra.job.id = f"job_id_for_{idx}"
