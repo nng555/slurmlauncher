@@ -11,7 +11,6 @@ from typing import Optional, Sequence
 from hydra.core.utils import (
     JobReturn,
     configure_log,
-    filter_overrides,
     run_job,
     setup_globals,
 )
@@ -69,6 +68,7 @@ class SlurmConfig:
     append_choices: bool = True
     sort_tags: bool = True
     cluster: Cluster = Cluster.SLURM
+    symlink_dir: Optional[str] = None
 
 ConfigStore.instance().store(
     group="hydra/launcher", name="slurm", node=SlurmConfig,
@@ -102,6 +102,7 @@ class SlurmLauncher(Launcher):
                  append_choices: bool,
                  sort_tags: bool,
                  cluster: Cluster,
+                 symlink_dir: str,
     ) -> None:
         self.config: Optional[DictConfig] = None
         self.task_function: Optional[TaskFunction] = None
@@ -113,6 +114,7 @@ class SlurmLauncher(Launcher):
 
         self.job_name = job_name
         self.job_dir = job_dir
+        self.symlink_dir = symlink_dir
 
         self.date = date
 
@@ -219,7 +221,7 @@ class SlurmLauncher(Launcher):
             with open(batch_fname, 'r') as infile:
                 subprocess.run(['bsub'], stdin=infile)
 
-    def write_batch(self, batch_fname, overrides, add_kwargs, job_name):
+    def write_batch(self, job_dir, overrides, add_kwargs, job_name):
         # set up run directories
         curr_cwd = os.getcwd()
         exec_path = os.path.join(curr_cwd, sys.argv[0])
@@ -260,11 +262,15 @@ class SlurmLauncher(Launcher):
         env_sh += 'export WANDB_NAME={}\n'.format(job_name)
         run_lines.append(env_sh)
 
+        # symlink checkpointing if necessary
+        if self.symlink_dir is not None:
+            run_lines.append('ln -snf {}/${{JOBID}} {}/${{JOBID}}\n'.format(self.symlink_dir, job_dir))
+
         # run script
         run_lines.append('python3 {} {}\n'.format(exec_path, overrides))
 
         # write batch submission file
-        with open(batch_fname, 'w') as batchf:
+        with open(os.path.join(job_dir, 'launch.sh'), 'w') as batchf:
             batchf.writelines(run_lines)
 
     def launch(
@@ -313,11 +319,12 @@ class SlurmLauncher(Launcher):
                             key = key.split('/')[-1]
                         job_tags.append(key + '_' + choices[key])
 
-        if self.append_choices and job_tags:
-            sweep_dir = self.config.hydra.sweep.dir + ',' + ','.join(job_tags)
-            self.job_name += ',' + ','.join(job_tags)
-            self.job_dir += ',' + ','.join(job_tags)
+        #if self.append_choices and job_tags:
+        #    sweep_dir = self.config.hydra.sweep.dir + ',' + ','.join(job_tags)
+        #    self.job_name += ',' + ','.join(job_tags)
+        #    self.job_dir += ',' + ','.join(job_tags)
 
+        sweep_dir = self.config.hydra.sweep.dir
         Path(str(sweep_dir)).mkdir(parents=True, exist_ok=True)
         log.info("Job name: {}".format(self.job_name))
         runs = []
@@ -343,6 +350,9 @@ class SlurmLauncher(Launcher):
 
             if self.sort_tags:
                 sweep_tags.sort()
+
+            if self.append_choices and job_tags:
+                sweep_tags = job_tags + sweep_tags
 
             if len(sweep_tags) > 0:
                 OmegaConf.update(sweep_config, 'tags', sweep_tags)
@@ -373,9 +383,13 @@ class SlurmLauncher(Launcher):
                 add_kwargs.append(('J', self.job_name + '/' + tag))
                 add_kwargs.append(('cwd', job_dir))
 
-            batch_fname = os.path.join(job_dir, 'launch.sh')
             overrides = self.filter_overrides(overrides)
-            self.write_batch(batch_fname, " ".join(overrides), add_kwargs, self.job_name + '/' + tag)
+            #if self.append_choices:
+            #    overrides.append(
+            #        'hydra.sweep.dir="{}"'.format(self.job_dir)
+            #    )
+
+            self.write_batch(job_dir, " ".join(overrides), add_kwargs, self.job_name + '/' + tag)
 
             with open_dict(sweep_config):
                 sweep_config.hydra.job.id = f"job_id_for_{idx}"
@@ -385,7 +399,7 @@ class SlurmLauncher(Launcher):
             lst = " ".join(overrides)
             log.info(f"\t#{idx} : {tag}")
             #log.info("\tJob tag: {}".format(tag))
-            self.launch_job(batch_fname)
+            self.launch_job(os.path.join(job_dir, 'launch.sh'))
 
             configure_log(self.config.hydra.hydra_logging, self.config.hydra.verbose)
         return runs
