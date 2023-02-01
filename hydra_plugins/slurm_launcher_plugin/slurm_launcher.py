@@ -234,14 +234,14 @@ class SlurmLauncher(Launcher):
         elif self.cluster == Cluster.LSF:
             opt_key = '#BSUB -'
         batch_opts =  [opt_key + k.replace('_','-') + ' ' + v for (k, v) in (self.batch_kwargs + add_kwargs) if v is not None]
-        run_lines.append('\n'.join(batch_opts) + '\n')
+        run_lines.append('\n'.join(batch_opts) + '\n\n')
 
         # load modules
         if self.modules is not None:
             ml_sh = ' '.join(['module load'] + self.modules) + '\n'
         else:
             ml_sh = ''
-        run_lines.append(ml_sh)
+        run_lines.append(ml_sh + '\n')
 
         # load environment
         if self.env_name is not None:
@@ -251,7 +251,7 @@ class SlurmLauncher(Launcher):
                 venv_sh = '. $HOME/venv/{}/bin/activate\n'.format(self.env_name)
             else:
                 venv_sh = ''
-            run_lines.append(venv_sh)
+            run_lines.append(venv_sh + '\n')
 
         # set env variables
         if self.cluster == Cluster.SLURM:
@@ -260,14 +260,14 @@ class SlurmLauncher(Launcher):
             job_id_name = 'LSB_JOBID'
         env_sh = 'export JOBID=${}\n'.format(job_id_name)
         env_sh += 'export WANDB_NAME={}\n'.format(job_name)
-        run_lines.append(env_sh)
+        run_lines.append(env_sh + '\n')
 
         # symlink checkpointing if necessary
         if self.symlink_dir is not None:
             run_lines.append('ln -snf {}/${{JOBID}} {}/${{JOBID}}\n'.format(self.symlink_dir, job_dir))
 
         # run script
-        run_lines.append('python3 {} {}\n'.format(exec_path, overrides))
+        run_lines.append('python3 {} \\\n{}\n'.format(exec_path, ' \\\n\t'.join(overrides)))
 
         # write batch submission file
         with open(os.path.join(job_dir, 'launch.sh'), 'w') as batchf:
@@ -293,8 +293,8 @@ class SlurmLauncher(Launcher):
         assert isinstance(tags, list) or isinstance(tags, ListConfig), \
                 'tags must be a string or list if specified'
 
-        sweep_keys = []
-        job_tags = []
+        sweep_keys = {}
+        job_tags = {}
 
         # get keys we're sweeping over if not present or if not overridden
         if not self.override_tags:
@@ -312,12 +312,14 @@ class SlurmLauncher(Launcher):
                            continue
                     elif ',' in vals:
                         assert vals != 'tags', 'tags cannot be swept over'
-                        sweep_keys.append(key)
+                        sweep_keys[key] = 1
                     # add default overrides to job name
                     elif key in choices:
                         if '/' in key:
                             key = key.split('/')[-1]
-                        job_tags.append(key + '_' + choices[key])
+                        job_tags[key] = choices[key]
+
+        job_tags = [k + '_' + v for k, v in job_tags.items()]
 
         #if self.append_choices and job_tags:
         #    sweep_dir = self.config.hydra.sweep.dir + ',' + ','.join(job_tags)
@@ -336,7 +338,7 @@ class SlurmLauncher(Launcher):
             )
             choices = sweep_config.hydra.runtime.choices
 
-            sweep_tags = tags.copy()
+            sweep_tags = {}
 
             # if not override then autopopulate from values
             if not self.override_tags:
@@ -346,7 +348,10 @@ class SlurmLauncher(Launcher):
                     if okey in sweep_keys:
                         if '.' in okey:
                             okey = okey.split('.')[-1]
-                        sweep_tags.append(okey + '_' + val)
+                        # dict ensures we overwrite with only the last value
+                        sweep_tags[okey] = val
+
+            sweep_tags = [k + '_' + v for k, v in sweep_tags.items()] + tags.copy()
 
             if self.sort_tags:
                 sweep_tags.sort()
@@ -359,6 +364,9 @@ class SlurmLauncher(Launcher):
                 tag = ','.join([str(t) for t in sweep_config.tags])
             else:
                 tag = str(idx)
+
+            # remove old tag override
+            overrides = [o for o in overrides if 'tags=' not in o]
 
             # add manual override to launcher
             overrides.append('tags=[{}]'.format(tag))
@@ -389,7 +397,7 @@ class SlurmLauncher(Launcher):
             #        'hydra.sweep.dir="{}"'.format(self.job_dir)
             #    )
 
-            self.write_batch(job_dir, " ".join(overrides), add_kwargs, self.job_name + '/' + tag)
+            self.write_batch(job_dir, overrides, add_kwargs, self.job_name + '/' + tag)
 
             with open_dict(sweep_config):
                 sweep_config.hydra.job.id = f"job_id_for_{idx}"
