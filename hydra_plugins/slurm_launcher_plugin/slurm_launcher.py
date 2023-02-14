@@ -288,10 +288,10 @@ class SlurmLauncher(Launcher):
         tags = getattr(self.config, 'tags', [])
         if tags is None:
             tags = []
-        if isinstance(tags, str):
-            tags = [tags]
-        assert isinstance(tags, list) or isinstance(tags, ListConfig), \
-                'tags must be a string or list if specified'
+        if not isinstance(tags, list) and not isinstance(tags, ListConfig):
+            tags = [str(tags)]
+        else:
+            tags = [str(t) for t in tags]
 
         sweep_keys = {}
         job_tags = {}
@@ -302,6 +302,7 @@ class SlurmLauncher(Launcher):
             multi_overrides = self.config.hydra.overrides
             choices = self.config.hydra.runtime.choices
             for v in multi_overrides.values():
+                print(v)
                 for o in v:
                     key, vals = o.split('=')
                     # a bit janky but check if val is a list or dict or string
@@ -313,11 +314,21 @@ class SlurmLauncher(Launcher):
                     elif ',' in vals:
                         assert vals != 'tags', 'tags cannot be swept over'
                         sweep_keys[key] = 1
+
+                        # remove option from job_tags if sweeping
+                        if key in job_tags:
+                            del job_tags[key]
+
                     # add default overrides to job name
                     elif key in choices:
                         if '/' in key:
                             key = key.split('/')[-1]
                         job_tags[key] = choices[key]
+
+                        # remove option from sweeps if single choice
+                        if key in sweep_keys:
+                            del sweep_keys[key]
+
 
         job_tags = [k + '_' + v for k, v in job_tags.items()]
 
@@ -355,9 +366,11 @@ class SlurmLauncher(Launcher):
 
             if self.sort_tags:
                 sweep_tags.sort()
+                job_tags.sort()
 
             if self.append_choices and job_tags:
                 sweep_tags = job_tags + sweep_tags
+
 
             if len(sweep_tags) > 0:
                 OmegaConf.update(sweep_config, 'tags', sweep_tags)
