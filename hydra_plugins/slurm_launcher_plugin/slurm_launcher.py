@@ -1,5 +1,6 @@
 from dataclasses import dataclass
 from enum import Enum
+import time
 
 import sys
 import subprocess
@@ -53,9 +54,9 @@ class SlurmConfig:
     partition: Optional[str] = None
     account: Optional[str] = None
     qos: Optional[str] = None
-    max_running: int = -1
-    max_pending: int = -1
-    max_total: int = -1
+    max_running: int = 400
+    max_pending: int = 400
+    max_total: int = 400
     wait_time: int = 10
     env_type: str = 'venv'
     env_name: Optional[str] = None
@@ -187,8 +188,7 @@ class SlurmLauncher(Launcher):
             opt, val = overrides[i].split('=', 1)
             if "$" in val:
                 val = val.replace('$', '\$')
-            else:
-                overrides[i] = '='.join([opt, '"' + val + '"'])
+            overrides[i] = '='.join([opt, '"' + val + '"'])
 
         # don't remove hydra overrides?
         return overrides
@@ -260,7 +260,11 @@ class SlurmLauncher(Launcher):
             job_id_name = 'LSB_JOBID'
         env_sh = 'export JOBID=${}\n'.format(job_id_name)
         env_sh += 'export WANDB_NAME={}\n'.format(job_name)
+        env_sh += 'export XLA_PYTHON_CLIENT_MEM_FRACTION=0.8\n'
         run_lines.append(env_sh + '\n')
+
+        # nvidia-smi
+        run_lines.append('nvidia-smi\n')
 
         # symlink checkpointing if necessary
         if self.symlink_dir is not None:
@@ -304,7 +308,7 @@ class SlurmLauncher(Launcher):
             for v in multi_overrides.values():
                 print(v)
                 for o in v:
-                    key, vals = o.split('=')
+                    key, vals = o.split('=', 1)
                     # a bit janky but check if val is a list or dict or string
                     if (vals[0] == '[' and vals[-1] == ']') or \
                        (vals[0] == '{' and vals[-1] == '}') or \
@@ -354,7 +358,7 @@ class SlurmLauncher(Launcher):
             # if not override then autopopulate from values
             if not self.override_tags:
                 for job_or in sweep_config.hydra.overrides.task:
-                    okey, val = job_or.split('=')
+                    okey, val = job_or.split('=', 1)
                     # grab last bit of keys swept over
                     if okey in sweep_keys:
                         if '.' in okey:
