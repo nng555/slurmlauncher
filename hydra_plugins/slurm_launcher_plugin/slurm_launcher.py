@@ -2,6 +2,7 @@ from dataclasses import dataclass
 from enum import Enum
 import time
 
+import re
 import sys
 import subprocess
 import os
@@ -37,6 +38,24 @@ log = logging.getLogger(__name__)
 class Cluster(Enum):
     SLURM = 0
     LSF = 1
+
+def convert_time_limit(time_limit_str):
+    # Define regex patterns for different time formats
+    patterns = [
+        (r"^(\d+)$", lambda m: int(m.group(1)) * 60),  # minutes
+        (r"^(\d+):(\d+)$", lambda m: int(m.group(1)) * 60 + int(m.group(2))),  # minutes:seconds
+        (r"^(\d+):(\d+):(\d+)$", lambda m: int(m.group(1)) * 3600 + int(m.group(2)) * 60 + int(m.group(3))),  # hours:minutes:seconds
+        (r"^(\d+)-(\d+)$", lambda m: int(m.group(1)) * 86400 + int(m.group(2)) * 3600),  # days-hours
+        (r"^(\d+)-(\d+):(\d+)$", lambda m: int(m.group(1)) * 86400 + int(m.group(2)) * 3600 + int(m.group(3)) * 60),  # days-hours:minutes
+        (r"^(\d+)-(\d+):(\d+):(\d+)$", lambda m: int(m.group(1)) * 86400 + int(m.group(2)) * 3600 + int(m.group(3)) * 60 + int(m.group(4)))  # days-hours:minutes:seconds
+    ]
+
+    for pattern, converter in patterns:
+        match = re.match(pattern, time_limit_str)
+        if match:
+            return converter(match)
+
+    raise ValueError("Invalid time limit format")
 
 @dataclass
 class SlurmConfig:
@@ -272,6 +291,12 @@ class SlurmLauncher(Launcher):
 
         # run script
         run_lines.append('python3 {} \\\n{}\n'.format(exec_path, ' \\\n\t'.join(overrides)))
+
+        # add timeout and requeuing
+        if self.cluster == Cluster.SLURM and self.batch_kwargs[-1][1] is not None:
+            timeout_time = convert_time_limit(self.batch_kwargs[-1][1]) - 60
+            run_lines[-1] = f"timeout {timeout_time}s " + run_lines[-1]
+            run_lines.append("if [[ $? == 124 ]]; then scontrol requeue $SLURM_JOB_ID; fi")
 
         # write batch submission file
         with open(os.path.join(job_dir, 'launch.sh'), 'w') as batchf:
