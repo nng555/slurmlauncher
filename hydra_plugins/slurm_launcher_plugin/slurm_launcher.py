@@ -89,6 +89,8 @@ class SlurmConfig:
     sort_tags: bool = True
     cluster: Cluster = Cluster.SLURM
     symlink_dir: Optional[str] = None
+    singularity_overlay: Optional[str] = None
+    singularity_img: Optional[str] = None
 
 ConfigStore.instance().store(
     group="hydra/launcher", name="slurm", node=SlurmConfig,
@@ -123,18 +125,20 @@ class SlurmLauncher(Launcher):
                  sort_tags: bool,
                  cluster: Cluster,
                  symlink_dir: str,
+                 singularity_overlay: str,
+                 singularity_img: str,
     ) -> None:
         self.config: Optional[DictConfig] = None
         self.task_function: Optional[TaskFunction] = None
         self.hydra_context: Optional[HydraContext] = None
 
         self.cluster = cluster
-        if partition is None and self.cluster == Cluster.SLURM:
-            raise Exception("Partition required for slurm clusters")
 
         self.job_name = job_name
         self.job_dir = job_dir
         self.symlink_dir = symlink_dir
+        self.singularity_overlay = singularity_overlay
+        self.singularity_img = singularity_img
 
         self.date = date
 
@@ -144,7 +148,7 @@ class SlurmLauncher(Launcher):
             self.modules = None
 
         if self.cluster == Cluster.SLURM:
-            assert partition is not None, "Must provide partition when using SLURM"
+            #assert partition is not None, "Must provide partition when using SLURM"
             assert cpus_per_task is not None, "Must provide cpus_per_task when using SLURM"
             self.batch_kwargs = [
                 ('cpus_per_task', str(cpus_per_task)),
@@ -178,6 +182,13 @@ class SlurmLauncher(Launcher):
         self.wait_time = wait_time
 
         self.env_type = env_type
+        assert (self.env_type == "singularity" or self.singularity_overlay is None), \
+            f"Cannot set both env type {self.env_type} and singularity overlay {self.singularity_overlay}."
+
+        if self.env_type is None and self.singularity_overlay is not None:
+            assert self.singularity_img is not None, "Must set singularity image if using singularity env"
+            self.env_type = 'singularity'
+
         self.env_name = env_name
 
         self.override_tags = override_tags
@@ -206,7 +217,7 @@ class SlurmLauncher(Launcher):
         for i in range(len(overrides)):
             opt, val = overrides[i].split('=', 1)
             if "$" in val:
-                val = val.replace('$', '\$')
+                val = val.replace('$', '\\$')
             overrides[i] = '='.join([opt, '"' + val + '"'])
 
         # don't remove hydra overrides?
@@ -290,7 +301,13 @@ class SlurmLauncher(Launcher):
             run_lines.append('ln -snf {}/${{JOBID}} {}/${{JOBID}}\n'.format(self.symlink_dir, job_dir))
 
         # run script
-        run_lines.append('python3 {} \\\n{}\n'.format(exec_path, ' \\\n\t'.join(overrides)))
+        run_str = 'python3 {} \\\n{}\n'.format(exec_path, ' \\\n\t'.join(overrides))
+        if self.env_type == 'singularity':
+            singularity_str = 'echo \'source /ext3/env.sh; {}\' | '.format(run_str)
+            singularity_str += f'singularity exec --nv --overlay {self.singularity_overlay}:ro {self.singularity_img} /bin/bash'
+            run_lines.append(singularity_str + '\n')
+        else:
+            run_lines.append(run_str + '\n')
 
         # add timeout and requeuing
         if self.cluster == Cluster.SLURM and self.batch_kwargs[-1][1] is not None:
