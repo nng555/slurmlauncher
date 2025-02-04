@@ -89,6 +89,7 @@ class SlurmConfig:
     sort_tags: bool = True
     cluster: Cluster = Cluster.SLURM
     symlink_dir: Optional[str] = None
+    container: Optional[str] = None
     singularity_overlay: Optional[str] = None
     singularity_img: Optional[str] = None
 
@@ -125,6 +126,7 @@ class SlurmLauncher(Launcher):
                  sort_tags: bool,
                  cluster: Cluster,
                  symlink_dir: str,
+                 container: str,
                  singularity_overlay: str,
                  singularity_img: str,
     ) -> None:
@@ -182,14 +184,16 @@ class SlurmLauncher(Launcher):
         self.wait_time = wait_time
 
         self.env_type = env_type
-        assert (self.env_type == "singularity" or self.singularity_overlay is None), \
-            f"Cannot set both env type {self.env_type} and singularity overlay {self.singularity_overlay}."
-
-        if self.env_type is None and self.singularity_overlay is not None:
-            assert self.singularity_img is not None, "Must set singularity image if using singularity env"
-            self.env_type = 'singularity'
-
         self.env_name = env_name
+        self.container = container
+
+        assert (self.container == "singularity" or self.singularity_overlay is None), \
+            f"Must set singularity overlay {self.singularity_overlay} if using singularity container."
+
+        if self.container is None and self.singularity_overlay is not None:
+            assert self.singularity_img is not None, "Must set singularity image if using singularity env"
+            log.info("No container set, defaulting to singularity since singularity_img was set.")
+            self.container = 'singularity'
 
         self.override_tags = override_tags
         self.sort_tags = sort_tags
@@ -281,7 +285,10 @@ class SlurmLauncher(Launcher):
                 venv_sh = '. $HOME/venv/{}/bin/activate\n'.format(self.env_name)
             else:
                 venv_sh = ''
-            run_lines.append(venv_sh + '\n')
+
+            # only load environment first if we aren't inside a container
+            if self.container != 'singularity':
+                run_lines.append(venv_sh + '\n')
 
         # set env variables
         if self.cluster == Cluster.SLURM:
@@ -302,11 +309,13 @@ class SlurmLauncher(Launcher):
 
         # run script
         run_str = 'python3 {} \\\n{}\n'.format(exec_path, ' \\\n\t'.join(overrides))
-        if self.env_type == 'singularity':
-            singularity_str = 'echo \'source /ext3/env.sh; {}\' | '.format(run_str)
-            singularity_str += f'singularity exec --nv --overlay {self.singularity_overlay}:ro {self.singularity_img} /bin/bash'
+        if self.container == 'singularity':
+            singularity_str = f'singularity exec --nv --overlay {self.singularity_overlay}:ro {self.singularity_img} /bin/bash -c '
+            singularity_str += "'source /ext3/env.sh\n{}{}'".format(venv_sh, run_str)
             run_lines.append(singularity_str + '\n')
         else:
+            if self.container is not None:
+                raise Exception(f"Container {self.container} is not supported yet.")
             run_lines.append(run_str + '\n')
 
         # add timeout and requeuing
